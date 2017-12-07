@@ -47,8 +47,19 @@
    PAL temporaries.
 */
 
+/*
+    History:
+    2106-07-05  DTH  Added serial_xmit() to print serial bits written to the
+                        SL_XMIT register during SROM debugging. SL_XMIT
+                        output may need to be controlled with a debug flag,
+                        or rerouted to the virtual COM2 port.
+*/
+
 #include "alpha_defs.h"
 #include "alpha_ev5_defs.h"
+
+#define DBG_WARN 0x00000001
+#define DBG_REG  0x00000002
 
 t_uint64 ev5_palshad[PALSHAD_SIZE] = { 0 };             /* PAL shadow reg */
 t_uint64 ev5_palsave[PALSHAD_SIZE] = { 0 };             /* PAL save main */
@@ -56,6 +67,7 @@ t_uint64 ev5_paltemp[PALTEMP_SIZE] = { 0 };             /* PAL temps */
 t_uint64 ev5_palbase = 0;                               /* PALcode base */
 t_uint64 ev5_excaddr = 0;                               /* exception address */
 t_uint64 ev5_isr = 0;                                   /* intr summary */
+t_uint64 ev5_sl_xmit = 0;                               /* serial xmit (serial bit cache) */
 t_uint64 ev5_icsr = 0;                                  /* IBox control */
 t_uint64 ev5_itb_pte = 0;                               /* ITLB pte */
 t_uint64 ev5_itb_pte_temp = 0;                          /* ITLB readout */
@@ -114,6 +126,8 @@ extern jmp_buf save_env;
 extern uint32 pal_type;
 extern t_uint64 pcq[PCQ_SIZE];                          /* PC queue */
 extern int32 pcq_p;                                     /* PC queue ptr */
+extern DEVICE cpu_dev;
+extern t_uint64 PC_global;
 
 extern int32 parse_reg (const char *cptr);
 
@@ -174,8 +188,112 @@ DEVICE ev5pal_dev = {
     NULL, DEV_DIS
     };
 
+char* IPRnames[] = {
+/*00*/  "ISR", "ITB_TAG","ITB_PTE","ITB_ASN",
+/*04*/  "ITB_PTE_TEMP", "ITB_IA", "ITB_IAP", "ITB_IS",
+/*08*/  "SIRR", "ASTRR", "ASTER", "EXC_ADDR",
+/*12*/  "EXC_SUM", "EXC_MASK", "PAL_BASE", "ICM",
+/*16*/  "IPLR", "INTID", "IFAULT_VA_FORM", "IVPTBR",
+/*20*/  "No IPR 0x114", "HWINT_CLR", "SL_XMIT", "SL_RCV",
+/*24*/  "ICSR", "IC_FLUSH_CTL", "ICPERR_STAT", "No IPR 0x11B",
+/*28*/  "PMCTR", "ABOX0", "ABOX1", "ABOX2",
+/*32*/  "ABOX3", "ABOX4", "ABOX5", "ABOX6",
+/*36*/  "ABOX7", "ABOX8", "ABOX9", "ABOX10",
+/*40*/  "ABOX11", "ABOX12", "ABOX13", "ABOX14",
+/*44*/  "ABOX15", "ABOX16", "ABOX17", "ABOX18",
+/*48*/  "ABOX19", "ABOX20", "ABOX21", "ABOX22",
+/*52*/  "ABOX23", "DTB_ASN", "DTB_CM", "DTB_TAG",
+/*56*/  "DTB_PTE", "DTB_PTE_TEMP", "MM_STAT", "VA",
+/*60*/  "VA_FORM", "MVPTBR", "DTB_IAP", "DTB_IA",
+/*64*/  "DTB_IS", "ALT_MODE", "CC", "CC_CTL",
+/*68*/  "MCSR", "DC_FLUSH", "no IPR 0x211", "DC_PERR_STAT",
+/*72*/  "DC_TEST_CTL", "DC_TEST_TAG", "DC_TEST_TAG_TEMP","DC_MODE",
+/*76*/  "MAF_MODE", "?unknown?"
+};
+
 /* EV5 interrupt dispatch - reached from top of instruction loop -
    dispatch to PALcode */
+
+char* IPRname (uint32 ipr)
+{
+    int offset;
+
+    switch (ipr) {
+
+    case ISR:
+    case ITB_TAG:
+    case ITB_PTE:
+    case ITB_ASN:
+    case ITB_PTE_TEMP:
+    case ITB_IA:
+    case ITB_IAP:
+    case ITB_IS:
+    case SIRR:
+    case ASTRR:
+    case ASTEN:
+    case EXC_ADDR:
+    case EXC_SUMM:
+    case EXC_MASK:
+    case PAL_BASE:
+    case ICM:
+    case IPLR:
+    case INTID:
+    case IFAULT_VA_FORM:
+    case IVPTBR:
+    case 0x114:     // No IPR 114
+    case HWINT_CLR:
+    case SL_XMIT:
+    case SL_RCV:
+    case ICSR:
+    case IC_FLUSH_CTL:
+    case ICPERR_STAT:
+    case 0x11B:     // No IPR 11B
+    case PMCTR:
+        offset = ipr - ISR;
+        break;
+
+    case PALTEMP+0x00:     case PALTEMP+0x01:     case PALTEMP+0x02:     case PALTEMP+0x03:
+    case PALTEMP+0x04:     case PALTEMP+0x05:     case PALTEMP+0x06:     case PALTEMP+0x07:
+    case PALTEMP+0x08:     case PALTEMP+0x09:     case PALTEMP+0x0A:     case PALTEMP+0x0B:
+    case PALTEMP+0x0C:     case PALTEMP+0x0D:     case PALTEMP+0x0E:     case PALTEMP+0x0F:
+    case PALTEMP+0x10:     case PALTEMP+0x11:     case PALTEMP+0x12:     case PALTEMP+0x13:
+    case PALTEMP+0x14:     case PALTEMP+0x15:     case PALTEMP+0x16:     case PALTEMP+0x17:
+        offset = ipr - PALTEMP + 29;
+        break;
+
+    case DTB_ASN:
+    case DTB_CM:
+    case DTB_TAG:
+    case DTB_PTE:
+    case DTB_PTE_TEMP:
+    case MM_STAT:
+    case VA:
+    case VA_FORM:
+    case MVPTBR:
+    case DTB_IAP:
+    case DTB_IA:
+    case DTB_IS:
+    case ALT_MODE:
+    case CC:
+    case CC_CTL:
+    case MCSR:
+    case DC_FLUSH:
+    case 0x211:     // No IPR 211
+    case DC_PERR_STAT:
+    case DC_TEST_CTL:
+    case DC_TEST_TAG:
+    case DC_TEST_TAG_TEMP:
+    case DC_MODE:
+    case MAF_MODE:
+        offset = ipr - DTB_ASN + 53;
+        break;
+
+    default:
+        offset = 77;
+        break;
+    }; // switch
+    return IPRnames[offset];
+}
 
 t_stat pal_proc_intr (uint32 lvl)
 {
@@ -583,12 +701,86 @@ switch (fnc) {
         break;
 
     default:
+        sim_debug (DBG_WARN, &cpu_dev, "pal_19: @PC(%llx) read of undispatched CPU IPR @%x(%s)\n", (PC_Global - 4), fnc, IPRname(fnc));
         res = 0;
         break;
         }
-
+sim_debug (DBG_REG, &cpu_dev, "pal_19: @PC(%llx) read CPU ISR @%x(%s), value=%llx\n", (PC_Global - 4), fnc, IPRname(fnc), res);
 if (ra != 31) R[ra] = res & M64;
 return SCPE_OK;
+}
+
+t_stat serial_xmit (t_uint64 val)
+{
+    /* Writing to the SL_XMIT buffer only looks at the single transmit bit 7.
+    
+    [in SRM 5.8 console:\src\ev6_vms_pal.mar]
+    Serial output via SL_XMIT is done by driving the serial line high (1), followed by:
+        a. start bit 0 (high->low transition)
+        b. 8 data bits
+        c. stop bit 1
+        d. N extra stop bits to let the serial port stabilize (that is, not overflow)
+           [SRM indicates that there are 16 bits total: high, start, 8x data, stop, 5 extra stop]
+    */
+
+    /*
+    State machine:
+        Undefined --1--> Stop --0--> Data (exactly 8 bits) +--1--> [Eject data] --> Stop
+                                                           +--0--> Undefined    
+        Serial data will be ejected via printf upon changing to Stop state.
+        Serial bits MAY be pushed LSB first, since buffers appear to rotate right under the bit window.
+
+    The ev5_sl_xmit buffer will be divided into multiple areas:
+        ev5_sl_xmit<7:0>    serial data to be ejected
+        ev5_sl_smit<15:8>   valid bit mask (used to count 8 bits by shifting)
+        ev5_sl_xmit<30>     Defined State: 0=Stop, 1=Data
+        ev5_sl_xmit<31>     State: 0=Undefined, 1=defined    
+    */
+#define EV5_SL_XMIT_STATE_M             0xC0000000u
+#define EV5_SL_XMIT_STATE_UNDEFINED     0x00000000u
+#define EV5_SL_XMIT_STATE_UNDEFINED2    0x40000000u
+#define EV5_SL_XMIT_STATE_STOP          0x80000000u
+#define EV5_SL_XMIT_STATE_DATA          0xC0000000u
+
+    switch ((ev5_sl_xmit & EV5_SL_XMIT_STATE_M)) {
+    case EV5_SL_XMIT_STATE_UNDEFINED:  /* Undefined state */
+    case EV5_SL_XMIT_STATE_UNDEFINED2:  /* invalid Undefined state (cannot occur) */
+#if 0
+        if (val & 0x80) {
+            ev5_sl_xmit = EV5_SL_XMIT_STATE_STOP;  // transition to Stop state
+        } else {
+            sim_printf ("serial_xmit: received bit 0 in undefined state\n");
+        }
+        break;
+#endif
+    case EV5_SL_XMIT_STATE_STOP:    /* Stop state */
+        if (!(val & 0x80)) {
+            /* start bit received */
+            ev5_sl_xmit = EV5_SL_XMIT_STATE_DATA;   // transition to data state
+        }
+        break;
+    case EV5_SL_XMIT_STATE_DATA:
+        if ((ev5_sl_xmit & 0xFF00) == 0xFF00) {
+            /* serial buffer has 8 bits in it */
+            if (val & 0x80) {
+                /* stop bit correctly received; eject data and transition to Stop state */
+                sim_printf("%c", (char)(ev5_sl_xmit & 0xFF));
+                ev5_sl_xmit = 0x80000000;   // transition to Stop state
+            } else {
+                /* stop bit not correctly received; eject error message and transition to Undefined state */
+                sim_printf ("serial_xmit: serial bit overflow\n");
+                ev5_sl_xmit = 0x00000000;   // transition to Undefined state
+            }
+        } else {
+            /* serial buffer does not have 8 bits yet, add another bit */
+            ev5_sl_xmit >>= 1;              // shift register by 1
+            ev5_sl_xmit |= 0xC0000000;      // rewrite Data state bits
+            ev5_sl_xmit |= 0x8000;          // add serial accumulator bit
+            ev5_sl_xmit |= (val & 0x80);    // add in serial bit
+        }
+        break;
+    }
+    return SCPE_OK;
 }
 
 /* PAL move to processor registers */
@@ -601,6 +793,7 @@ t_uint64 val = R[ra];
 
 if (!pal_mode && (!(itlb_cm == MODE_K) ||               /* pal mode, or kernel */
     !(ev5_icsr & ICSR_HWE))) ABORT (EXC_RSVI);          /* and enabled? */
+sim_debug (DBG_REG, &cpu_dev, "pal_1d: @PC(%llx) write CPU ISR @%x(%s), value=%llx\n", (PC_Global - 4), fnc, IPRname(fnc), val);
 switch (fnc) {
 
     case ITB_TAG:
@@ -669,6 +862,10 @@ switch (fnc) {
 
     case HWINT_CLR:
         ev5_isr = ev5_isr & ~(val & HWINT_CLR_W1C);
+        break;
+        
+    case SL_XMIT:
+        serial_xmit (val);
         break;
 
     case ICSR:
@@ -768,6 +965,7 @@ switch (fnc) {
         break;
 
     default:
+        sim_debug (DBG_WARN, &cpu_dev, "pal_1d: @PC(%llx) write of undispatched CPU IPR @%x(%s), value=%llx\n", (PC_Global - 4), fnc, IPRname(fnc), val);
         break;
         }
 

@@ -121,8 +121,31 @@
         alpha_defs.h    add device address and interrupt definitions
         alpha_sys.c     add sim_devices table entry
 */
+/*
+    History:
+    --------
+    2016-07-17  DTH  Added detection of invalid CBU addresses
+    2016-07-09  DTH  Added cpu_dib, cpu_read(), and cpu_write() hooks
+                        for later implementation of CBU registers
+                        which are accessed through the upper 1MB of I/O space
+                        (FF.FFF0.0000-FF.FFFF.FFFF). This range contains
+                        Scache and Bcache controls, which are not currently being simulated,
+                        so the registers are not implemented yet.
+    2016-07-07  DTH  Added detection and loop exit of infinite loop instruction
+                        0xC3FFFFFF: BR  R31,-1. This instruction was found in
+                        the SROM code instead of a HALT instruction, causing the
+                        simulation to run the CPU core at 100% until killed.
+    2015-09-20  DTH   Added all known Barriers and Misc (18) function codes,
+                        so that warnings can be issued
+*/
 
 #include "alpha_defs.h"
+#include "alpha_sys_defs.h"
+
+// Debug flags
+#define DBG_REG  0x0001     // IPR registers
+#define DBG_WARN 0x0002     // Any unusual behavior
+#define DBG_INS  0x0004     // instruction trace
 
 #define UNIT_V_CONH     (UNIT_V_UF + 0)                 /* halt to console */
 #define UNIT_V_MSIZE    (UNIT_V_UF + 1)
@@ -185,6 +208,7 @@ uint32 hst_p = 0;                                       /* history pointer */
 uint32 hst_lnt = 0;                                     /* history length */
 InstHistory *hst = NULL;                                /* instruction history */
 jmp_buf save_env;
+int ins_level = 0;                                      /* instruction level */
 
 const t_uint64 byte_mask[8] = {
     0x00000000000000FF, 0x000000000000FF00,
@@ -209,6 +233,8 @@ t_stat cpu_set_hist (UNIT *uptr, int32 val, CONST char *cptr, void *desc);
 t_stat cpu_show_hist (FILE *st, UNIT *uptr, int32 val, CONST void *desc);
 t_stat cpu_show_virt (FILE *of, UNIT *uptr, int32 val, CONST void *desc);
 t_stat cpu_fprint_one_inst (FILE *st, uint32 ir, t_uint64 pc, t_uint64 ra, t_uint64 rb);
+t_bool cpu_read  (t_uint64 pa, t_uint64 *val, uint32 lnt);
+t_bool cpu_write (t_uint64 pa, t_uint64  val, uint32 lnt);
 
 extern t_uint64 op_ldf (t_uint64 op);
 extern t_uint64 op_ldg (t_uint64 op);
@@ -233,6 +259,7 @@ extern t_stat pal_proc_trap (uint32 type);
 extern t_stat pal_proc_intr (uint32 type);
 extern t_stat pal_proc_inst (uint32 fnc);
 extern uint32 tlb_set_cm (int32 cm);
+extern void patch_rom (void);
 
 /* CPU data structures
 
@@ -349,13 +376,32 @@ MTAB cpu_mod[] = {
     { 0 }
     };
 
+DEBTAB cpu_debug[] = {
+  {"REG",  DBG_REG,   "watch IPR register read/write"},
+  {"WARN", DBG_WARN,  "display warnings"},
+  {"INS",  DBG_INS,   "instruction trace"},
+  {0}
+};
+
+// The Alpha CPU has external interface control (CBU) IPRs in the last 1MB of I/O space. [21164 HRM, 5.3]
+// The I/O dispatch is declared here so that the CBU registers are not
+// dispatched to the system I/O control chip (Alcor, Pyxis, etc.)
+DIB cpu_dib = {
+    0xFFFFF00000ull,        // low  - FF.FFF0.0000
+    0xFFFFFFFFFFull,        // high - FF.FFFF.FFFF
+    &cpu_read,              // read
+    &cpu_write,             // write
+    0                       // ipl
+};
+
 DEVICE cpu_dev = {
     "CPU", &cpu_unit, cpu_reg, cpu_mod,
     1, 16, 48, 8, 16, 64,
     &cpu_ex, &cpu_dep, &cpu_reset,
     &cpu_boot, NULL, NULL,
-    NULL, DEV_DYNM|DEV_DEBUG, 0,
-    NULL, &cpu_set_size, NULL
+    &cpu_dib, DEV_DYNM|DEV_DEBUG|DEV_DIB,
+    DBG_REG|DBG_WARN/*0*/,
+    cpu_debug, &cpu_set_size, NULL
     };
 
 t_stat sim_instr (void)
@@ -429,10 +475,14 @@ while (reason == 0) {
             hst[hst_p].ra = R[ra];                      /* save Ra */
             hst[hst_p].rb = R[rb];                      /* save Rb */
             }
-        if (DEBUG_PRS (cpu_dev))                        /* trace enabled? */
+        //if (DEBUG_PRS (cpu_dev))                        
+        if (sim_deb && (cpu_dev.dctrl & DBG_INS))       /* trace enabled? */
             cpu_fprint_one_inst (sim_deb, ir, PC | pc_align, R[ra], R[rb]);
         }
-
+#if 1 || DBG_LEVEL0
+    if (sim_deb && (ins_level == 0))
+        cpu_fprint_one_inst (sim_deb, ir, PC | pc_align, R[ra], R[rb]);
+#endif
     PC = (PC + 4) & M64;                                /* advance PC */
     switch (op) {
 
@@ -635,12 +685,38 @@ while (reason == 0) {
         rbv = R[rb];                                    /* in case Ra = Rb */
         if (ra != 31) R[ra] = PC;                       /* save PC */
         PC = rbv;                                       /* jump */
+#if 1 || DBG_LEVEL0
+        {
+            uint8 jmp_type = (ir & 0xC000) >> 14;       // instruction type = disp<15:14>
+            switch (jmp_type) {
+            case 1: /*JSR*/
+                ins_level += 1;
+                break;
+            case 2: /*RET*/
+                ins_level -= 1;
+                break;
+            case 0: /*JMP*/
+            case 3: /*JSR_COROUTINE*/
+                break;
+            }
+        }
+#endif
         break;
 
-    case OP_BR:                                         /* BR, BSR */
     case OP_BSR:
+#if 1 || DBG_LEVEL0
+        ins_level += 1;
+#endif
+    case OP_BR:                                         /* BR, BSR */
         PCQ_ENTRY;
-        if (ra != 31) R[ra] = PC;                       /* save PC */
+        if (ra != 31) {
+            R[ra] = PC;                       /* save PC */
+        } else {
+            if (ir == 0xC3FFFFFFu) {
+                sim_printf("\nInfinite loop detected: BR  R31,-1\n");
+                cpu_astop = 1;   // infinite loop: BR R31, -1
+            }
+        }
         dsp = I_GETBDSP (ir);
         PC = (PC + (SEXT_BDSP (dsp) << 2)) & M64;       /* branch */
         break;
@@ -1329,9 +1405,29 @@ while (reason == 0) {
    The simulator is uniprocessor only, and has ordered memory accesses and
    precise exceptions.  Therefore, the barriers are all NOP's. */
 
+  // DTH 21050902 Added all known function codes, so that warnings can be issued
+
     case OP_MISC:                                       /* misc */
         fnc = I_GETMDSP (ir);                           /* get function */
         switch (fnc) {                                  /* case on function */
+
+        case 0x0000:                                    /* TRAPB */
+            break;
+
+        case 0x0400:                                    /* EXCB */
+            break;
+
+        case 0x4000:                                    /* MB */
+            break;
+
+        case 0x4400:                                    /* WMB */
+            break;
+
+        case 0x8000:                                    /* FETCH */
+            break;
+
+        case 0xA000:                                    /* FETCH_M */
+            break;
 
         case 0xC000:                                    /* RPCC */
             pcc_l = pcc_l & M32;
@@ -1343,14 +1439,24 @@ while (reason == 0) {
             vax_flag = 0;
             break;
 
+        case 0xE800:                                    /* ECB */
+            break;
+
         case 0xF000:                                    /* RS */
             if (ra != 31) R[ra] = vax_flag;
             vax_flag = 1;
             break;
 
-        default:
+        case 0xF800:                                    /* WH64 */
             break;
-            }
+
+        case 0xFC00:                                    /* WH64EN */
+            break;
+
+        default:
+            sim_debug (DBG_WARN, &cpu_dev, "sim_instr: Opcode 18 undispatched function code (%x)\n", fnc);
+            break;
+        }
 
         break;
 
@@ -1520,32 +1626,32 @@ while (reason == 0) {
 
 /* PAL hardware functions */
 
-    case OP_PAL19:
+    case OP_PAL19:                                      /* MFPR */
         reason = pal_19 (ir);
         intr_summ = pal_eval_intr (1);                  /* eval interrupts */
         break;
 
-    case OP_PAL1B:
+    case OP_PAL1B:                                      /* HW_LD */
         reason = pal_1b (ir);
         intr_summ = pal_eval_intr (1);                  /* eval interrupts */
         break;
 
-    case OP_PAL1D:
+    case OP_PAL1D:                                      /* MTPR */
         reason = pal_1d (ir);
         intr_summ = pal_eval_intr (1);                  /* eval interrupts */
         break;
 
-    case OP_PAL1E:
+    case OP_PAL1E:                                      /* HW_REI */
         reason = pal_1e (ir);
         intr_summ = pal_eval_intr (1);                  /* eval interrupts */
         break;
 
-    case OP_PAL1F:
+    case OP_PAL1F:                                      /* HW_ST */
         reason = pal_1f (ir);
         intr_summ = pal_eval_intr (1);                  /* eval interrupts */
         break;
 
-    case OP_PAL:                                        /* PAL code */
+    case OP_PAL:                                        /* Call PAL code */
         fnc = I_GETPAL (ir);                            /* get function code */
         if ((fnc & 0x40) || (fnc >= 0xC0))              /* out of range? */
             ABORT (EXC_RSVI);
@@ -1670,7 +1776,43 @@ return SCPE_OK;
 
 t_stat cpu_boot (int32 unitno, DEVICE *dptr)
 {
-return SCPE_ARG;
+    /*
+        Normally, the Alpha's starting PC is 0, and attempting to execute
+        code at the starting PC after power up generates an invalid cache fault,
+        which will then fault in the beginning of the POST code from the SROM.
+
+        In the Miata, the Flash chip contains both the POST and SRM/ARC code
+        and is mapped to the following address ranges on power-up by the PYXIS.
+            0.0000.0000 - 0.000F.FFFF (FLASH_CTRL.FLASH_LOW_ENABLE bit)
+            F.FC00.0000 - F.FFFF.FFFF (FLASH_CTRL.FLASH_HIGH_ENABLE bit)
+
+        For the Miata, it is simpler to set the starting PC directly to
+        the high flash starting address of F.FC00.0000 than to write
+        the invalid cache fill routines for the cacheless Alpha simulator,
+        or to fake mapping the low flash range through the existing
+        simulator structures, which expects to access the simulated memory.
+
+        The normal Miata POST code transfers control to the next instruction
+        as mapped into the high flash range within just a few instructions,
+        and then disables the low flash range. This modified starting PC just gets
+        the simulation to the high flash addresses earlier than normal,
+        which is harmless.
+    */
+    PC = ROMBASE;
+
+    /*
+        At various points, the Flash code might try to do some things that the simulation
+        doesn't attempt to simulate, or takes too long to do something. The following
+        patch point allows us to temporarily fix up the Flash that was dumped from a
+        real Miata MX (rev C01) to get past any deal breakers that hurt or halt the simulation.
+
+        For example, one of the first things that the POST code does is stall for a huge number
+         (~56 Million) of CPU cycles to give the real-world hardware time to stabilize after the power on.
+        This stabilization delay does not necessarily need to be emulated in the simulation.
+    */
+    patch_rom();
+
+return SCPE_OK;
 }
 
 /* Memory examine */
@@ -1860,4 +2002,70 @@ for (k = 0; k < lnt; k++) {                             /* print specified */
         }                                               /* end if */
     }                                                   /* end for */
 return SCPE_OK;
+}
+
+// External Interface Control (CBU) registers [21164 HRM, 5.3]
+t_bool cpu_read (t_uint64 pa, t_uint64 *val, uint32 lnt)
+{
+    sim_debug (DBG_WARN, &cpu_dev, "cpu_read: CBU registers not implemented. pa(%llx), val(%llx), lnt(%d)\n", pa, *val, lnt);
+
+    switch (pa) {
+    case CBU_SC_CTL:
+        break;
+    case CBU_SC_STAT:
+        break;
+    case CBU_SC_ADDR:
+        break;
+    case CBU_BC_CONTROL:
+        break;
+    case CBU_BC_CONFIG:
+        break;
+    case CBU_BC_TAG_ADDR:
+        break;
+    case CBU_EI_STAT:
+        break;
+    case CBU_EI_ADDR:
+        break;
+    case CBU_FILL_SYN:
+        break;
+    default:
+        sim_printf("cpu_read: Undefined CBU register (%llx)\n", pa);
+        break;
+    };
+
+    return TRUE;
+}
+
+// External Interface Control (CBU) registers are detailed in [21164 HRM, 5.3]
+t_bool cpu_write (t_uint64 pa, t_uint64 val, uint32 lnt)
+{
+    sim_debug (DBG_WARN, &cpu_dev, "cpu_write: CBU registers not implemented. pa(%llx), val(%llx), lnt(%d)\n", pa, val, lnt);
+
+
+    switch (pa) {
+    case CBU_SC_CTL:
+        break;
+    case CBU_SC_STAT:
+        break;
+    case CBU_SC_ADDR:
+        break;
+    case CBU_BC_CONTROL:
+        break;
+    case CBU_BC_CONFIG:
+        break;
+    case CBU_BC_TAG_ADDR:
+        break;
+    case CBU_EI_STAT:
+        break;
+    case CBU_EI_ADDR:
+        break;
+    case CBU_FILL_SYN:
+        break;
+    default:
+        sim_printf("cpu_write: Undefined CBU register (%llx)\n", pa);
+        break;
+    };
+
+
+    return TRUE;
 }

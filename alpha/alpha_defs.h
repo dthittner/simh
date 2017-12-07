@@ -369,6 +369,13 @@ typedef struct {
 #define L_LONG          2
 #define L_QUAD          3
 
+/* I/O system definitions */
+
+#define DEV_V_EISA      (DEV_V_UF + 1)                  /* EISA bus */
+#define DEV_V_PCI       (DEV_V_UF + 2)                  /* PCI bus */
+#define DEV_EISA        (1u << DEV_V_EISA)
+#define DEV_PCI         (1u << DEV_V_PCI)
+
 /* Device information block */
 
 typedef struct {                                        /* device info block */
@@ -455,5 +462,16 @@ uint32 mmu_set_cm (uint32 mode);
 void mmu_set_icm (uint32 mode);
 void mmu_set_dcm (uint32 mode);
 void arith_trap (uint32 trap, uint32 ir);
+
+// External Interface Control (CBU) IPRs [HRM 5.3]
+#define CBU_SC_CTL      0xFFFFF000A8ull
+#define CBU_SC_STAT     0xFFFFF000E8ull
+#define CBU_SC_ADDR     0xFFFFF00188ull
+#define CBU_BC_CONTROL  0xFFFFF00128ull
+#define CBU_BC_CONFIG   0xFFFFF001C8ull
+#define CBU_BC_TAG_ADDR 0xFFFFF00108ull
+#define CBU_EI_STAT     0xFFFFF00168ull
+#define CBU_EI_ADDR     0xFFFFF00148ull
+#define CBU_FILL_SYN    0xFFFFF00068ull
 
 #endif

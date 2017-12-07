@@ -134,6 +134,7 @@ return SCPE_OK;
 #define C_MR            CL_MR | FL_RA | FL_RB | FL_RBI | FL_MDP
 #define C_FE            CL_MO | FL_RB | FL_RBI
 #define C_RV            CL_MO | FL_RA
+#define C_MX            CL_MO                                   // DTH 20150903 Added to support MB decode
 #define C_MO            CL_MO | FL_RA | FL_RB
 #define C_IO            CL_IO | FL_RA | FL_RB | FL_RC | FL_LIT
 #define C_IAC           CL_IO | FL_RA | FL_RC

@@ -28,16 +28,18 @@
    Alpha Program Office.
 
    This is a STUB!
+
+   2015-08-07  DTH  Sized PA_* and ROM* parameters for Alpha PWS 500au (Miata)
 */
 
 #ifndef ALPHA_SYS_DEFS_H_
 #define ALPHA_SYS_DEFS_H_      0
 
-#define PA_SIZE                 36                       /* PA size */
-#define PA_MASK                 0x0000000FFFFFFFFF
+#define PA_SIZE                 40                       /* PA size */
+#define PA_MASK                 0x000000FFFFFFFFFF
 
-#define ROMBASE                 0x000000FFFC000000
-#define ROMSIZE                 0x0000000004000000
+#define ROMBASE                 0x0000000FFC000000		 /* Flash high PA address */
+#define ROMSIZE                 0x0000000000100000       /* 1MB Flash */
 
 #endif
 

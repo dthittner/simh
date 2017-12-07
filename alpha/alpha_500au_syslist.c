@@ -24,12 +24,28 @@
    in this Software without prior written authorization from Robert M Supnik.
 */
 
+/*
+   History:
+
+   2016-04-18  DTH  Added pka and ewa devices
+
+*/
 #include "alpha_defs.h"
 
 extern DEVICE cpu_dev;
 extern DEVICE tlb_dev;
 extern DEVICE ev5pal_dev;
 extern DEVICE rom_dev;
+extern DEVICE pyxis_dev;
+extern DEVICE pci2isa_dev;
+extern DEVICE super_io_dev;
+extern DEVICE uart1_dev;
+extern DEVICE uart2_dev;
+extern DEVICE lpt_dev;
+extern DEVICE rtc_dev;
+extern DEVICE pka_dev;
+extern DEVICE ewa_dev;
+extern DEVICE ewb_dev;
 
 /* SCP data structures and interface routines
 
@@ -44,6 +60,16 @@ DEVICE *sim_devices[] = {
     &tlb_dev,
     &ev5pal_dev,
     &rom_dev,
+    &pyxis_dev,
+    &pci2isa_dev,
+    &super_io_dev,
+    &uart1_dev,
+    &uart2_dev,
+    &lpt_dev,
+    &rtc_dev,
+    &pka_dev,
+    &ewa_dev,
+    &ewb_dev,
     NULL
     };
 

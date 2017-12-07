@@ -28,8 +28,9 @@
 
 #include "alpha_defs.h"
 #include "alpha_sys_defs.h"
+#include "alpha_miata_rom.h"
 
-t_uint64 *rom = NULL;                                   /* boot ROM */
+t_uint64 *rom = (t_uint64*) miata_default_rom/*NULL*/;                                   /* boot ROM */
 
 t_bool rom_rd (t_uint64 pa, t_uint64 *val, uint32 lnt);
 t_bool rom_wr (t_uint64 pa, t_uint64 val, uint32 lnt);
@@ -114,6 +115,7 @@ for (i = 0; sim_devices[i] != NULL; i++) {
             return dibp->write (pa, dat, lnt);
         }
     }
+printf ("alpha_io::WriteIO: unimplemented physical address %llx\n", pa);
 return FALSE;
 }
 
@@ -210,3 +212,16 @@ if (rom == NULL) rom = (t_uint64 *) calloc (ROMSIZE >> 3, sizeof (t_uint64));
 if (rom == NULL) return SCPE_MEM;
 return SCPE_OK;
 }
+
+/* Function prototypes for I/O */
+
+int32 Map_ReadB (uint32 ba, int32 bc, uint8 *buf) { return 0;}
+int32 Map_ReadW (uint32 ba, int32 bc, uint16 *buf) {return 0;}
+int32 Map_WriteB (uint32 ba, int32 bc, uint8 *buf) {return 0;}
+int32 Map_WriteW (uint32 ba, int32 bc, uint16 *buf) {return 0;}
+
+int32 clk_tps = 100;                                    /* ticks/second */
+#define CLK_DELAY       5000                            /* 100 Hz */
+#define TMXR_MULT       1                               /* 100 Hz */
+int32 tmxr_poll = CLK_DELAY * TMXR_MULT;                /* term mux poll */
+int32 tmr_poll = CLK_DELAY;                             /* pgm timer poll */
