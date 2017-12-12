@@ -28,10 +28,18 @@
    Alpha Program Office.
 */
 
+// 2017-12-08  DTH  Added EVx address limit documentation references
+
 #ifndef ALPHA_EV5_DEFS_H_
 #define ALPHA_EV5_DEFS_H_      0
 
 /* Address limits */
+
+// EV4x supports 43-bit virtual address space (8TB), 34-bit physical address space (16GB) - 21064 HRM, Sec 4.7
+// EV5x supports 43-bit virtual address space (8TB), 40-bit physical address space ( 1TB) - 21164 HRM, Sec 1.1.1
+// EV6x supports 48-bit and 43-bit virtual address space (256TB), 44-bit physical address space (16TB) - 21264 HRM, Sec 1.1.1
+// EV7x supports 48-bit and 43-bit virtual address space (256TB), 44-bit physical address space (16TB) - 21264/21364 Compiler Writer's Guide, Sec 1.1.1
+// Note that none of the Alpha Systems produced ever achieved the maximum theoretical physical memory for their processor type!
 
 #define VA_SIZE                 43                       /* VA size */
 #define NTVA_WIDTH              32                       /* VA width for NT */
@@ -173,7 +181,7 @@ enum ev5_internal_reg {
     DTB_ASN = 0x200, DTB_CM, DTB_TAG, DTB_PTE,
     DTB_PTE_TEMP, MM_STAT, VA, VA_FORM,
     MVPTBR, DTB_IAP, DTB_IA, DTB_IS,
-    ALTMODE, CC, CC_CTL, MCSR,
+    ALT_MODE, CC, CC_CTL, MCSR,
     DC_FLUSH, DC_PERR_STAT = 0x212, DC_TEST_CTL,
     DC_TEST_TAG, DC_TEST_TAG_TEMP, DC_MODE, MAF_MODE
     };

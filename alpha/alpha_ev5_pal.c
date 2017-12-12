@@ -206,7 +206,7 @@ char* IPRnames[] = {
 /*56*/  "DTB_PTE", "DTB_PTE_TEMP", "MM_STAT", "VA",
 /*60*/  "VA_FORM", "MVPTBR", "DTB_IAP", "DTB_IA",
 /*64*/  "DTB_IS", "ALT_MODE", "CC", "CC_CTL",
-/*68*/  "MCSR", "DC_FLUSH", "no IPR 0x211", "DC_PERR_STAT",
+/*68*/  "MCSR", "DC_FLUSH", "No IPR 0x211", "DC_PERR_STAT",
 /*72*/  "DC_TEST_CTL", "DC_TEST_TAG", "DC_TEST_TAG_TEMP","DC_MODE",
 /*76*/  "MAF_MODE", "?unknown?"
 };
